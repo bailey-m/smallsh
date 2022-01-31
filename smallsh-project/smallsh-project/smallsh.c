@@ -48,7 +48,7 @@ void printCommand(struct command* command) {
 // "You do not need to do any error checking on the syntax of the command line"
 struct command* parseCommand(char commandInput[2049])
 {
-	// TODO check for comments, blank lines, and $$ expansion
+	// TODO check for $$ expansion
 	const char* space = " ";
 	const char* inputFileChar = "<";
 	const char* outputFileChar = ">";
@@ -99,75 +99,112 @@ struct command* parseCommand(char commandInput[2049])
 	return commandStruct;
 }
 
+int isBlankLine(char commandInput[2049])
+{
+	char space[2] = " ";
+	for (int i = 0; i < strlen(&commandInput); i++)
+	{
+		// If a non-blank character is encountered, return 0 (False)
+		if (strncmp(&commandInput[i], space, 1) != 0)
+		{
+			return 0;
+		}
+	}
+	return 1;
+}
+
+int isComment(char commandInput[2049])
+{
+	char pound[2] = "#";
+	char space[2] = " ";
+	// Iterate through potential blank space before comment
+	for (int i = 0; i < strlen(&commandInput); i++) {
+		// If the char is not a blank space
+		if (strncmp(&commandInput[i], space, 1) != 0)
+		{
+			// If the char is a #, return 1 (True)
+			if (strncmp(&commandInput[i], pound, 1) == 0)
+			{
+				return 1;
+			}
+			// Otherwise, return 0 (False)
+			else
+			{
+				return 0;
+			}
+		}
+	}
+	return 0;
+}
+
 void displayPrompt(void)
 {
 	int isExiting = 0;
 	char commandInput[2049]; // Supports command line with a max length of 2048 chars
-	char exit = "exit";
-	char cd = "cd";
-	char status = "status";
+	char* exit = "exit";
+	char* cd = "cd";
+	char* status = "status";
 	char* HOME = "HOME";
 
 	while (isExiting == 0)
 	{
 		printf("\n: ");
 		fflush(stdout);
-		scanf(" %[^\n]", commandInput);
-		printf("\n");
-
-		// TODO remove following statements before turning in, used for debugging only
-		//printf("you said: %s", commandInput);
-		//fflush(stdout);
-		struct command* command = parseCommand(commandInput);
-		memset(commandInput, '\0', sizeof(commandInput));
-		printCommand(command);
+		scanf("%[^\n]", commandInput);
+		//printf("\n");
 		
-		/*
-		// Check for exit
-		if (strncmp(command->command, exit, 5) == 0)
-		{
-			// TODO kill all processes created by this shell
-			isExiting = 1;
-		}
-		// Check for cd
-		else if (strncmp(command->command, cd, 3) == 0)
-		{
-			
-			// If no args following cd, CD to directory specified by HOME env var
-			if (strcmp(command->args[0], "") == 0)
+		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
+			struct command* command = parseCommand(commandInput);
+			printCommand(command); // TODO remove this line and line below, for debugging only
+			fflush(stdout);
+
+			// Check for exit
+			if (strncmp(command->command, exit, 5) == 0)
 			{
-				char* homeDir = getenv(HOME);
-				int cdSuccess = chdir(homeDir);
-				if (cdSuccess != 0)
+				// TODO kill all processes created by this shell
+				isExiting = 1;
+			}
+			// Check for cd
+			else if (strncmp(command->command, cd, 3) == 0)
+			{
+
+				// If no args following cd, CD to directory specified by HOME env var
+				if (strcmp(command->args[0], "") == 0)
 				{
-					printf("Error changing directory.\n");
-					fflush(stdout);
+					char* homeDir = getenv(HOME);
+					int cdSuccess = chdir(homeDir);
+					if (cdSuccess != 0)
+					{
+						printf("Error changing directory.\n");
+						fflush(stdout);
+					}
+					else
+					{
+						char* cwdPath[2049];
+						getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
+						printf("current dir is: %s\n", cwdPath);
+						fflush(stdout);
+					}
 				}
+				// If args following CD
 				else
 				{
-					char* cwdPath[2049];
-					getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
-					printf("current dir is: %s\n", cwdPath);
-					fflush(stdout);
+
 				}
+
 			}
-			// If args following CD
+			// Check for status
+			else if (strncmp(commandInput, status, 7) == 0)
+			{
+
+			}
+			// All other commands
 			else
 			{
 
 			}
-			
 		}
-		// Check for status
-		else if (strncmp(commandInput, status, 7) == 0)
-		{
-
-		}
-		// All other commands
-		else 
-		{
-
-		} */
+		memset(commandInput, '\0', sizeof(commandInput));
 	}
 }
 
