@@ -102,7 +102,7 @@ struct command* parseCommand(char commandInput[2049])
 int isBlankLine(char commandInput[2049])
 {
 	char space[2] = " ";
-	for (int i = 0; i < strlen(&commandInput); i++)
+	for (int i = 0; i < strlen(commandInput); i++)
 	{
 		// If a non-blank character is encountered, return 0 (False)
 		if (strncmp(&commandInput[i], space, 1) != 0)
@@ -118,7 +118,7 @@ int isComment(char commandInput[2049])
 	char pound[2] = "#";
 	char space[2] = " ";
 	// Iterate through potential blank space before comment
-	for (int i = 0; i < strlen(&commandInput); i++) {
+	for (int i = 0; i < strlen(commandInput); i++) {
 		// If the char is not a blank space
 		if (strncmp(&commandInput[i], space, 1) != 0)
 		{
@@ -137,6 +137,47 @@ int isComment(char commandInput[2049])
 	return 0;
 }
 
+char* expandPids(char* commandInput) // TODO should this be pointer returned? // TODO fix the copying of strings before and after
+{
+	// iterate with while loop
+	char dollarSign[2] = "$";
+	int i = 0;
+	int foundFirstDollarSign = 0;
+
+	while (i < strlen(commandInput))
+	{
+		if (strncmp(&commandInput[i], dollarSign, 1) == 0)
+		{
+			if (foundFirstDollarSign) {
+				char expandedInput[2049];
+				
+				pid_t myPid = getpid();
+				char* pidString;
+				snprintf(pidString, 10, "%d", myPid); // convert PID to string
+				int indexLastCharBeforeExpansion = i - 2;
+				int indexFirstCharAfterExpansion = indexLastCharBeforeExpansion + strlen(pidString);
+				
+				strncpy(&expandedInput, &commandInput, indexLastCharBeforeExpansion); // copy portion of string before $$
+				strcat(&expandedInput, pidString); // append PID string to portion of string before $$
+				// append portion of string after $$
+				strncpy(&expandedInput + indexLastCharBeforeExpansion, commandInput + indexFirstCharAfterExpansion, strlen(commandInput) - indexFirstCharAfterExpansion);
+				printf("%s", expandedInput);
+				fflush(stdout);
+
+				// Set i back to i-1 (the first new PID character) to resume checking
+				i = i - 1;
+				foundFirstDollarSign = 0;
+				//expandedInput = calloc(2049, sizeof(char));
+			}
+			else
+			{
+				foundFirstDollarSign = 1;
+			}
+		}
+		i++;
+	}
+}
+
 void displayPrompt(void)
 {
 	int isExiting = 0;
@@ -150,10 +191,11 @@ void displayPrompt(void)
 	{
 		printf("\n: ");
 		fflush(stdout);
-		scanf("%[^\n]", commandInput);
+		scanf(" %s", &commandInput); // TODO handle new line entry
 		//printf("\n");
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
+			expandPids(commandInput);
 			struct command* command = parseCommand(commandInput);
 			printCommand(command); // TODO remove this line and line below, for debugging only
 			fflush(stdout);
