@@ -13,6 +13,7 @@ struct command {
 	char* inputFile;
 	char* outputFile;
 	int hasAmpersandAsLast;
+	int numArgs;
 };
 
 /*
@@ -20,9 +21,9 @@ struct command {
 * Args: char args[512 elements][2048 chars/element] // TODO update this when final size is decided
 * Returns: None
 */
-void printArgs(char* args[512])
+void printArgs(char* args[512], int numArgs)
 {
-	for (int i = 0; i < 512; i++)
+	for (int i = 0; i < numArgs; i++)
 	{
 		printf("arg %d: %s\n", i, args[i]);
 		fflush(stdout);
@@ -40,7 +41,7 @@ void printCommand(struct command* command) {
 		command->inputFile,
 		command->outputFile,
 		command->hasAmpersandAsLast);
-	printArgs(command->args);
+	printArgs(command->args, command->numArgs);
 }
 
 // Does not do any checking that input or output files are after all commands
@@ -96,6 +97,7 @@ struct command* parseCommand(char commandInput[2049])
 		}
 		token = strtok(NULL, space);
 	}
+	commandStruct->numArgs = i;
 	return commandStruct;
 }
 
@@ -137,13 +139,13 @@ int isComment(char commandInput[2049])
 	return 0;
 }
 
-char* expandPids(char* commandInput) // TODO should this be pointer returned? // TODO fix the copying of strings before and after
+char* expandPids(char commandInput[2049]) // TODO should this be pointer returned? // TODO fix the copying of strings before and after
 {
 	// iterate with while loop
 	char dollarSign[2] = "$";
 	int i = 0;
 	int foundFirstDollarSign = 0;
-
+	int strlengg = strlen(commandInput);
 	while (i < strlen(commandInput))
 	{
 		if (strncmp(&commandInput[i], dollarSign, 1) == 0)
@@ -152,22 +154,22 @@ char* expandPids(char* commandInput) // TODO should this be pointer returned? //
 				char expandedInput[2049];
 				
 				pid_t myPid = getpid();
-				char* pidString;
+				char pidString[10];
 				snprintf(pidString, 10, "%d", myPid); // convert PID to string
-				int indexLastCharBeforeExpansion = i - 2;
+				int indexLastCharBeforeExpansion = i - 1;
 				int indexFirstCharAfterExpansion = indexLastCharBeforeExpansion + strlen(pidString);
 				
-				strncpy(&expandedInput, &commandInput, indexLastCharBeforeExpansion); // copy portion of string before $$
+				strncpy(expandedInput, commandInput, indexLastCharBeforeExpansion); // copy portion of string before $$
 				strcat(&expandedInput, pidString); // append PID string to portion of string before $$
 				// append portion of string after $$
-				strncpy(&expandedInput + indexLastCharBeforeExpansion, commandInput + indexFirstCharAfterExpansion, strlen(commandInput) - indexFirstCharAfterExpansion);
-				printf("%s", expandedInput);
-				fflush(stdout);
+				strncpy(expandedInput + sizeof(char) * indexFirstCharAfterExpansion, commandInput + sizeof(char) * (i+1), strlen(commandInput) - (i+1));
 
 				// Set i back to i-1 (the first new PID character) to resume checking
 				i = i - 1;
 				foundFirstDollarSign = 0;
-				//expandedInput = calloc(2049, sizeof(char));
+				strcpy(commandInput, expandedInput);
+				memset(expandedInput, '\0', sizeof(expandedInput));
+				//free(expandedInput);
 			}
 			else
 			{
@@ -176,6 +178,7 @@ char* expandPids(char* commandInput) // TODO should this be pointer returned? //
 		}
 		i++;
 	}
+	return commandInput;
 }
 
 void displayPrompt(void)
@@ -195,7 +198,8 @@ void displayPrompt(void)
 		//printf("\n");
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
-			expandPids(commandInput);
+			char* expandedCommandInput = expandPids(commandInput);
+			strcpy(commandInput, expandedCommandInput);
 			struct command* command = parseCommand(commandInput);
 			printCommand(command); // TODO remove this line and line below, for debugging only
 			fflush(stdout);
@@ -209,9 +213,8 @@ void displayPrompt(void)
 			// Check for cd
 			else if (strncmp(command->command, cd, 3) == 0)
 			{
-
 				// If no args following cd, CD to directory specified by HOME env var
-				if (strcmp(command->args[0], "") == 0)
+				if (command->numArgs == 0)
 				{
 					char* homeDir = getenv(HOME);
 					int cdSuccess = chdir(homeDir);
