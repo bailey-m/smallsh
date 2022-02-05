@@ -139,13 +139,13 @@ int isComment(char commandInput[2049])
 	return 0;
 }
 
-char* expandPids(char commandInput[2049]) // TODO should this be pointer returned? // TODO fix the copying of strings before and after
+char* expandPids(char commandInput[2049]) 
 {
 	// iterate with while loop
 	char dollarSign[2] = "$";
 	int i = 0;
 	int foundFirstDollarSign = 0;
-	int strlengg = strlen(commandInput);
+	
 	while (i < strlen(commandInput))
 	{
 		if (strncmp(&commandInput[i], dollarSign, 1) == 0)
@@ -159,8 +159,10 @@ char* expandPids(char commandInput[2049]) // TODO should this be pointer returne
 				int indexLastCharBeforeExpansion = i - 1;
 				int indexFirstCharAfterExpansion = indexLastCharBeforeExpansion + strlen(pidString);
 				
-				strncpy(expandedInput, commandInput, indexLastCharBeforeExpansion); // copy portion of string before $$
-				strcat(&expandedInput, pidString); // append PID string to portion of string before $$
+				// copy portion of string before $$
+				strncpy(expandedInput, commandInput, indexLastCharBeforeExpansion);
+				// append PID string to portion of string before $$
+				strcat(&expandedInput, pidString);
 				// append portion of string after $$
 				strncpy(expandedInput + sizeof(char) * indexFirstCharAfterExpansion, commandInput + sizeof(char) * (i+1), strlen(commandInput) - (i+1));
 
@@ -169,12 +171,16 @@ char* expandPids(char commandInput[2049]) // TODO should this be pointer returne
 				foundFirstDollarSign = 0;
 				strcpy(commandInput, expandedInput);
 				memset(expandedInput, '\0', sizeof(expandedInput));
-				//free(expandedInput);
+				//free(expandedInput); // TODO test this
 			}
 			else
 			{
 				foundFirstDollarSign = 1;
 			}
+		}
+		else 
+		{
+			foundFirstDollarSign = 0;
 		}
 		i++;
 	}
@@ -194,8 +200,7 @@ void displayPrompt(void)
 	{
 		printf("\n: ");
 		fflush(stdout);
-		scanf(" %s", &commandInput); // TODO handle new line entry
-		//printf("\n");
+		scanf("%[^\n]%*c", &commandInput); // TODO handle new line entry
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
 			char* expandedCommandInput = expandPids(commandInput);
@@ -234,7 +239,44 @@ void displayPrompt(void)
 				// If args following CD
 				else
 				{
-
+					// Get CWD
+					char* cwdPath[2049];
+					getcwd(cwdPath, sizeof(cwdPath));
+					// Get desired directory
+					char* filePath = malloc(sizeof(command->args[0]));
+					strcpy(filePath, command->args[0]);
+					// Check if user included absolute path
+					if (strncmp(cwdPath, filePath, strlen(cwdPath)) == 0) // TODO not sure if comparing against CWD is correct??
+					{
+						// If they did, we don't need to concat the full CWD onto the desired directory
+						printf("desired dir is: %s\n", filePath);
+						fflush(stdout);
+						int cdSuccess = chdir(filePath);
+					}
+					else
+					{
+						// If they didn't, need to concat a '/' and the desired file path onto the CWD
+						char* slash = "/";
+						strcat(cwdPath, slash);
+						strcat(cwdPath, filePath);
+						printf("desired dir is: %s\n", cwdPath);
+						fflush(stdout);
+						int cdSuccess = chdir(cwdPath);
+					}
+					int cdSuccess = chdir(cwdPath);
+					if (cdSuccess != 0)
+					{
+						printf("Error changing directory.\n");
+						fflush(stdout);
+					}
+					else
+					{
+						char* cwdPath[2049];
+						getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
+						printf("current dir is: %s\n", cwdPath);
+						fflush(stdout);
+					}
+					memset(cwdPath, '/0', strlen(cwdPath));
 				}
 
 			}
