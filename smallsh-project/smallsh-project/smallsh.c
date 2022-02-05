@@ -259,11 +259,6 @@ void changeDir(struct command* command)
 // Citation: Module 4 Exploration: Process API - Executing a New Program
 void createFork(struct command* command)
 {
-	
-	
-	// TODO If command fails because shell could not find the command to run, print error and set exit status = 1
-	
-
 	int childStatus;
 	char* executableCommand = malloc(sizeof(command->command));
 	strcpy(executableCommand, command->command);
@@ -279,14 +274,63 @@ void createFork(struct command* command)
 	case 0:
 		// In the child process
 		printf("CHILD(%d) running ls command\n", getpid());
+
+		int sourceFD = 0;
+		int targetFD = 1;
+
+		if (command->inputFile)
+		{
+			char* inputFile = malloc(257);
+			strcpy(inputFile, command->inputFile);
+			// Open source file
+			int sourceFD = open(inputFile, O_RDONLY);
+			if (sourceFD == -1) {
+				perror("source open()");
+				exit(1);
+			}
+			// Written to terminal
+			printf("sourceFD == %d\n", sourceFD);
+			fflush(stdout);
+			fflush(stdin);
+
+			// Redirect stdin to source file
+			int result = dup2(sourceFD, 0);
+			if (result == -1) {
+				perror("source dup2()");
+				exit(2);
+			}
+
+		}
+
+		if (command->outputFile)
+		{
+			char* outputFile = malloc(257);
+			strcpy(outputFile, command->outputFile);
+			// Open target file
+			int targetFD = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (targetFD == -1) {
+				perror("target open()");
+				exit(1);
+			}
+			printf("targetFD == %d\n", targetFD); // Written to terminal
+			fflush(stdout);
+
+			// Redirect stdout to target file
+			int result = dup2(targetFD, 1);
+			if (result == -1) {
+				perror("target dup2()");
+				exit(2);
+			}
+		}
+
 		// Child will use execvp() to run command
 		// Execvp looks for the command in PATH specified variable
 		int execStatus = execvp(executableCommand, command->args); 
 		// exec only returns if there is an error
 		if (execStatus == -1)
 		{
-			perror("Error");
-			exit(1);
+			perror("execvp error");
+			exit(1); // TODO is this being set correctly?? check the test script
 		}
 		else 
 		{
@@ -300,7 +344,6 @@ void createFork(struct command* command)
 		printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
 		break;
 	}
-
 	memset(executableCommand, '/0', strlen(executableCommand));
 	//free(executableCommand);
 }
