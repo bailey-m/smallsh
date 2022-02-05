@@ -9,7 +9,7 @@
 
 struct command {
 	char* command;
-	char* args[512];
+	char* args[513];
 	char* inputFile;
 	char* outputFile;
 	int hasAmpersandAsLast;
@@ -18,10 +18,10 @@ struct command {
 
 /*
 * Prints each arg in a command
-* Args: char args[512 elements][2048 chars/element] // TODO update this when final size is decided
+* Args: char args[513 elements] (need to support 512 args, but copy the command into the first arg for execvp() )
 * Returns: None
 */
-void printArgs(char* args[512], int numArgs)
+void printArgs(char* args[513], int numArgs)
 {
 	for (int i = 0; i < numArgs; i++)
 	{
@@ -63,10 +63,12 @@ struct command* parseCommand(char commandInput[2049])
 	token = strtok(commandInput, space);
 	commandStruct->command = calloc(strlen(token) + 1, sizeof(char));
 	strcpy(commandStruct->command, token);
+	commandStruct->args[0] = calloc(strlen(token) + 1, sizeof(char));
+	strcpy(commandStruct->args[0], token);
 	token = strtok(NULL, space);
 
 	// Get args / input/output files
-	int i = 0;
+	int i = 1;
 	while (token != NULL)
 	{
 		// Check for < 
@@ -141,13 +143,13 @@ int isComment(char commandInput[2049])
 
 char* expandPids(char commandInput[2049]) 
 {
-	// iterate with while loop
 	char dollarSign[2] = "$";
 	int i = 0;
 	int foundFirstDollarSign = 0;
 	
 	while (i < strlen(commandInput))
 	{
+		// Compare each char in the command to '$'
 		if (strncmp(&commandInput[i], dollarSign, 1) == 0)
 		{
 			if (foundFirstDollarSign) {
@@ -178,6 +180,8 @@ char* expandPids(char commandInput[2049])
 				foundFirstDollarSign = 1;
 			}
 		}
+		// Each time a char != "$", reset the foundFirst$ to 0
+		// So that only consecutive $ (i.e. $$) trigger pid expansion
 		else 
 		{
 			foundFirstDollarSign = 0;
@@ -187,6 +191,120 @@ char* expandPids(char commandInput[2049])
 	return commandInput;
 }
 
+void changeDir(struct command* command)
+{
+	char* HOME = "HOME";
+	// If no args following cd, CD to directory specified by HOME env var
+	if (command->numArgs == 1)
+	{
+		char* homeDir = getenv(HOME);
+		int cdSuccess = chdir(homeDir);
+		if (cdSuccess != 0)
+		{
+			printf("Error changing directory.\n");
+			fflush(stdout);
+		}
+		else
+		{
+			char* cwdPath[2049];
+			getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
+			printf("current dir is: %s\n", cwdPath);
+			fflush(stdout);
+		}
+	}
+	// If args following CD
+	else
+	{
+		// Get CWD
+		char* cwdPath[2049];
+		getcwd(cwdPath, sizeof(cwdPath));
+		// Get desired directory
+		char* filePath = malloc(sizeof(command->args[1]));
+		strcpy(filePath, command->args[1]);
+		// Check if user included absolute path
+		if (strncmp(cwdPath, filePath, strlen(cwdPath)) == 0) // TODO not sure if comparing against CWD is correct?? we may just want to check for first char being /
+		{
+			// If they did, we don't need to concat the full CWD onto the desired directory
+			printf("desired dir is: %s\n", filePath);
+			fflush(stdout);
+			int cdSuccess = chdir(filePath);
+		}
+		else
+		{
+			// If they didn't, need to concat a '/' and the desired file path onto the CWD
+			char* slash = "/";
+			strcat(cwdPath, slash);
+			strcat(cwdPath, filePath);
+			printf("desired dir is: %s\n", cwdPath);
+			fflush(stdout);
+			int cdSuccess = chdir(cwdPath);
+		}
+		int cdSuccess = chdir(cwdPath);
+		if (cdSuccess != 0)
+		{
+			printf("Error changing directory.\n");
+			fflush(stdout);
+		}
+		else
+		{
+			char* cwdPath[2049];
+			getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
+			printf("current dir is: %s\n", cwdPath);
+			fflush(stdout);
+		}
+		memset(cwdPath, '/0', strlen(cwdPath));
+	}
+}
+
+// Citation: Module 4 Exploration: Process API - Executing a New Program
+void createFork(struct command* command)
+{
+	
+	
+	// TODO If command fails because shell could not find the command to run, print error and set exit status = 1
+	
+
+	int childStatus;
+	char* executableCommand = malloc(sizeof(command->command));
+	strcpy(executableCommand, command->command);
+
+	/// Parent forks off a child
+	pid_t spawnPid = fork();
+
+	switch (spawnPid) {
+	case -1:
+		perror("fork()\n");
+		exit(1);
+		break;
+	case 0:
+		// In the child process
+		printf("CHILD(%d) running ls command\n", getpid());
+		// Child will use execvp() to run command
+		// Execvp looks for the command in PATH specified variable
+		int execStatus = execvp(executableCommand, command->args); 
+		// exec only returns if there is an error
+		if (execStatus == -1)
+		{
+			perror("Error");
+			exit(1);
+		}
+		else 
+		{
+			exit(2);
+		}
+		break;
+	default:
+		// In the parent process
+		// Wait for child process to terminate after running a command
+		spawnPid = waitpid(spawnPid, &childStatus, 0);
+		printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
+		break;
+	}
+
+	memset(executableCommand, '/0', strlen(executableCommand));
+	//free(executableCommand);
+}
+
 void displayPrompt(void)
 {
 	int isExiting = 0;
@@ -194,13 +312,12 @@ void displayPrompt(void)
 	char* exit = "exit";
 	char* cd = "cd";
 	char* status = "status";
-	char* HOME = "HOME";
 
 	while (isExiting == 0)
 	{
 		printf("\n: ");
 		fflush(stdout);
-		scanf("%[^\n]%*c", &commandInput); // TODO handle new line entry
+		scanf("%[^\n]%*c", &commandInput); // TODO handle blank new line entry
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
 			char* expandedCommandInput = expandPids(commandInput);
@@ -218,67 +335,7 @@ void displayPrompt(void)
 			// Check for cd
 			else if (strncmp(command->command, cd, 3) == 0)
 			{
-				// If no args following cd, CD to directory specified by HOME env var
-				if (command->numArgs == 0)
-				{
-					char* homeDir = getenv(HOME);
-					int cdSuccess = chdir(homeDir);
-					if (cdSuccess != 0)
-					{
-						printf("Error changing directory.\n");
-						fflush(stdout);
-					}
-					else
-					{
-						char* cwdPath[2049];
-						getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
-						printf("current dir is: %s\n", cwdPath);
-						fflush(stdout);
-					}
-				}
-				// If args following CD
-				else
-				{
-					// Get CWD
-					char* cwdPath[2049];
-					getcwd(cwdPath, sizeof(cwdPath));
-					// Get desired directory
-					char* filePath = malloc(sizeof(command->args[0]));
-					strcpy(filePath, command->args[0]);
-					// Check if user included absolute path
-					if (strncmp(cwdPath, filePath, strlen(cwdPath)) == 0) // TODO not sure if comparing against CWD is correct??
-					{
-						// If they did, we don't need to concat the full CWD onto the desired directory
-						printf("desired dir is: %s\n", filePath);
-						fflush(stdout);
-						int cdSuccess = chdir(filePath);
-					}
-					else
-					{
-						// If they didn't, need to concat a '/' and the desired file path onto the CWD
-						char* slash = "/";
-						strcat(cwdPath, slash);
-						strcat(cwdPath, filePath);
-						printf("desired dir is: %s\n", cwdPath);
-						fflush(stdout);
-						int cdSuccess = chdir(cwdPath);
-					}
-					int cdSuccess = chdir(cwdPath);
-					if (cdSuccess != 0)
-					{
-						printf("Error changing directory.\n");
-						fflush(stdout);
-					}
-					else
-					{
-						char* cwdPath[2049];
-						getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
-						printf("current dir is: %s\n", cwdPath);
-						fflush(stdout);
-					}
-					memset(cwdPath, '/0', strlen(cwdPath));
-				}
-
+				changeDir(command);
 			}
 			// Check for status
 			else if (strncmp(commandInput, status, 7) == 0)
@@ -288,7 +345,7 @@ void displayPrompt(void)
 			// All other commands
 			else
 			{
-
+				createFork(command);
 			}
 		}
 		memset(commandInput, '\0', sizeof(commandInput));
