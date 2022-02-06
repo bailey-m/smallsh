@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <sys/wait.h>
 
 struct command {
 	char* command;
@@ -257,68 +258,92 @@ void changeDir(struct command* command)
 }
 
 // Citation: Module 4 Exploration: Process API - Executing a New Program
-void createFork(struct command* command)
+pid_t createFork(struct command* command)
 {
 	int childStatus;
 	char* executableCommand = malloc(sizeof(command->command));
 	strcpy(executableCommand, command->command);
 
-	/// Parent forks off a child
+	// Parent forks off a child
 	pid_t spawnPid = fork();
 
 	switch (spawnPid) {
 	case -1:
+		// Error while forking
 		perror("fork()\n");
+		fflush(stdout);
 		exit(1);
 		break;
 	case 0:
 		// In the child process
-		printf("CHILD(%d) running ls command\n", getpid());
+		printf("CHILD(%d) running command\n", getpid());
+		fflush(stdout);
 
 		int sourceFD = 0;
 		int targetFD = 1;
 
-		if (command->inputFile)
+
+		// Check for input redirection (or set input redirection to /dev/null if BG process and no specified input file)
+		if (command->inputFile || command->hasAmpersandAsLast) 
 		{
 			char* inputFile = malloc(257);
-			strcpy(inputFile, command->inputFile);
+			if (command->inputFile)
+			{
+				strcpy(inputFile, command->inputFile);
+			}
+			else if (command->hasAmpersandAsLast)
+			{
+				inputFile = "/dev/null";
+			}
+			
 			// Open source file
 			int sourceFD = open(inputFile, O_RDONLY);
 			if (sourceFD == -1) {
 				perror("source open()");
+				fflush(stdout);
 				exit(1);
 			}
 			// Written to terminal
-			printf("sourceFD == %d\n", sourceFD);
-			fflush(stdout);
-			fflush(stdin);
+			//printf("sourceFD == %d\n", sourceFD);
+			//fflush(stdout);
 
 			// Redirect stdin to source file
 			int result = dup2(sourceFD, 0);
 			if (result == -1) {
 				perror("source dup2()");
+				fflush(stdout);
 				exit(2);
 			}
-
 		}
 
-		if (command->outputFile)
+		// Check for output redirection (or set output redirection to /dev/null if BG process and no specified output file)
+		if (command->outputFile || command->hasAmpersandAsLast) 
 		{
 			char* outputFile = malloc(257);
-			strcpy(outputFile, command->outputFile);
+			if (command->outputFile)
+			{
+				strcpy(outputFile, command->outputFile);
+			}
+			else if (command->hasAmpersandAsLast)
+			{
+				outputFile = "/dev/null";
+			}
+
 			// Open target file
 			int targetFD = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 			if (targetFD == -1) {
-				perror("target open()");
+				perror("target open() error");
+				fflush(stdout);
 				exit(1);
 			}
-			printf("targetFD == %d\n", targetFD); // Written to terminal
-			fflush(stdout);
+			//printf("targetFD == %d\n", targetFD); // Written to terminal
+			//fflush(stdout);
 
 			// Redirect stdout to target file
 			int result = dup2(targetFD, 1);
 			if (result == -1) {
-				perror("target dup2()");
+				perror("target dup2() error");
+				fflush(stdout);
 				exit(2);
 			}
 		}
@@ -330,6 +355,7 @@ void createFork(struct command* command)
 		if (execStatus == -1)
 		{
 			perror("execvp error");
+			fflush(stdout);
 			exit(1); // TODO is this being set correctly?? check the test script
 		}
 		else 
@@ -339,13 +365,74 @@ void createFork(struct command* command)
 		break;
 	default:
 		// In the parent process
-		// Wait for child process to terminate after running a command
-		spawnPid = waitpid(spawnPid, &childStatus, 0);
-		printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
+		// Don't wait child process to terminate if it's a BG command
+
+		// Wait for child process to terminate after running a command if it's a FG command
+		if (!command->hasAmpersandAsLast)
+		{
+			spawnPid = waitpid(spawnPid, &childStatus, 0);
+			printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
+			fflush(stdout);
+			spawnPid = childStatus; // set spawnPid to be the exit status of the foreground process, for printing on next 'status' command
+			// TODO check if this is the right exit status
+		}
+		
+		// Return spawnPid back to displayPrompt loop so that we can check for its termination
+		return spawnPid;
 		break;
 	}
 	memset(executableCommand, '/0', strlen(executableCommand));
 	//free(executableCommand);
+}
+
+int checkChildProcessesForTermination(pid_t childProcessesRunning[200], int numChildProcesses)
+{
+	pid_t nonTerminatedChildren[200];
+	int numNonTerminatedChildren = 0;
+	for (int i = 0; i < numChildProcesses; i++)
+	{
+		int childStatus;
+		// using waitpid() to check for termination (from Linux manpages):
+		// if WNOHANG was specified and one or more child(ren) specified by pid exist, 
+		// but have not yet changed state, then 0 is returned
+		// 
+		// Therefore: if waitpid() returns 0 -> PID is still running
+		pid_t childPid = childProcessesRunning[i];
+		pid_t pidStatus = waitpid(childPid, &childStatus, WNOHANG);
+		if (pidStatus == 0)
+		{
+			nonTerminatedChildren[numNonTerminatedChildren] = childPid;
+			numNonTerminatedChildren++;
+		}
+		// If waitpid() returns -1, there was an error
+		else if (pidStatus == -1)
+		{
+			printf("Error checking PID %d\n", childPid);
+			perror("error");
+			fflush(stdout);
+		}
+		// If waitpid() returns the PID, the child process has terminated
+		else
+		{
+			// Print process ID and exit status
+			printf("Child process %d terminated with exit status %d.\n", childPid, childStatus); // TODO check if this is the right exit status
+		}
+	}
+
+	// Copy nonTerminatedChildren back over into original input array, childProcessesRunning
+	for (int i = 0; i < 200; i++)
+	{
+		if (i < numNonTerminatedChildren)
+		{
+			childProcessesRunning[i] = nonTerminatedChildren[i];
+		}
+		else
+		{
+			childProcessesRunning[i] = 0;
+		}
+	}
+
+	return numNonTerminatedChildren;
 }
 
 void displayPrompt(void)
@@ -355,9 +442,14 @@ void displayPrompt(void)
 	char* exit = "exit";
 	char* cd = "cd";
 	char* status = "status";
+	int lastForegroundExitStatus = 0;
+	int numChildProcesses = 0;
+	pid_t childProcessesRunning[200]; // 'ulimit -a' on os1 states a maximum of 200 user processes
 
 	while (isExiting == 0)
 	{
+		// Check if any of the currently running child processes have terminated
+		numChildProcesses = checkChildProcessesForTermination(childProcessesRunning, numChildProcesses);
 		printf("\n: ");
 		fflush(stdout);
 		scanf("%[^\n]%*c", &commandInput); // TODO handle blank new line entry
@@ -383,12 +475,25 @@ void displayPrompt(void)
 			// Check for status
 			else if (strncmp(commandInput, status, 7) == 0)
 			{
-
+				printf("Exit status: %d\n", lastForegroundExitStatus);
+				fflush(stdout);
 			}
 			// All other commands
 			else
 			{
-				createFork(command);
+				pid_t mostRecentChildProcess = createFork(command);
+				// If this was a BG process, keep track of the child PID
+				if (command->hasAmpersandAsLast)
+				{
+					// Add the running PID to an array of PIDs
+					childProcessesRunning[numChildProcesses] = mostRecentChildProcess;
+					numChildProcesses++;
+				}
+				// Otherwise, store it as the FG process exit status 
+				else
+				{
+					lastForegroundExitStatus = mostRecentChildProcess; // TODO check if this is the right exit status
+				}
 			}
 		}
 		memset(commandInput, '\0', sizeof(commandInput));
