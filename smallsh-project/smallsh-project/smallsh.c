@@ -10,6 +10,7 @@
 #include <signal.h>
 #define _POSIX_C_SOURCE 200809L
 
+// Structure of command line entry
 struct command {
 	char* command;
 	char* args[513];
@@ -18,6 +19,9 @@ struct command {
 	int hasAmpersandAsLast;
 	int numArgs;
 };
+
+// Global boolean variable for whether or not a SIGTSTP (Ctrl-Z) has been received
+int receivedSIGTSTP = 0;
 
 /*
 * Prints each arg in a command
@@ -324,15 +328,23 @@ pid_t createFork(struct command* command)
 		exit(1);
 		break;
 	case 0:
+	{
 		// In the child process
-		//printf("CHILD(%d) running command\n", getpid());
-		//fflush(stdout);
 
-		///int sourceFD = 0;
-		//int targetFD = 1;
+		// Foreground and background child processes ignore SIGTSTP
+		struct sigaction ignore_action = { 0 };
+		ignore_action.sa_handler = SIG_IGN;
+		sigaction(SIGTSTP, &ignore_action, NULL);
+		signal(SIGTSTP, SIG_IGN);
+
+		// If background process, ignore SIG_INT
+		if (command->hasAmpersandAsLast) {
+			sigaction(SIGINT, &ignore_action, NULL);
+			signal(SIGTSTP, SIG_IGN);
+		}
 
 		// Check for input redirection (or set input redirection to /dev/null if BG process and no specified input file)
-		if (command->inputFile || command->hasAmpersandAsLast) 
+		if (command->inputFile || command->hasAmpersandAsLast)
 		{
 			char* inputFile = malloc(257);
 			if (command->inputFile)
@@ -343,7 +355,7 @@ pid_t createFork(struct command* command)
 			{
 				inputFile = "/dev/null";
 			}
-			
+
 			// Open source file
 			int sourceFD = open(inputFile, O_RDONLY);
 			if (sourceFD == -1) {
@@ -365,7 +377,7 @@ pid_t createFork(struct command* command)
 		}
 
 		// Check for output redirection (or set output redirection to /dev/null if BG process and no specified output file)
-		if (command->outputFile || command->hasAmpersandAsLast) 
+		if (command->outputFile || command->hasAmpersandAsLast)
 		{
 			char* outputFile = malloc(257);
 			if (command->outputFile)
@@ -398,7 +410,7 @@ pid_t createFork(struct command* command)
 
 		// Child will use execvp() to run command
 		// Execvp looks for the command in PATH specified variable
-		int execStatus = execvp(executableCommand, command->args); 
+		int execStatus = execvp(executableCommand, command->args);
 		// exec only returns if there is an error
 		if (execStatus == -1)
 		{
@@ -406,11 +418,12 @@ pid_t createFork(struct command* command)
 			fflush(stdout);
 			exit(1); // TODO is this being set correctly?? check the test script
 		}
-		else 
+		else
 		{
 			exit(2);
 		}
 		break;
+	}
 	default:
 		// In the parent process
 		// Don't wait child process to terminate if it's a BG command
@@ -507,6 +520,27 @@ void killChildProcesses(pid_t childProcessesRunning[200], int numChildProcesses)
 	}
 }
 
+/* Checks if SIGTSTP was called since the last time it was checked and displays the correct message.
+* Args: int
+* Returns: None
+*/
+void checkForSIGTSTP(int oldReceivedSIGTSTP)
+{
+	if (oldReceivedSIGTSTP != receivedSIGTSTP)
+	{
+		if (receivedSIGTSTP == 1)
+		{
+			printf("SIGTSTP received. Entering foreground only mode.\n");
+			fflush(stdout);
+		}
+		else
+		{
+			printf("SIGTSTP received. Background processes now permitted.\n");
+			fflush(stdout);
+		}
+	}
+}
+
 /*
 * Uses a while loop to continuously prompt the user for command line input.
 * Retrieves user input and uses parseCommand() to assign user input to a command struct.
@@ -525,19 +559,31 @@ void displayPrompt(void)
 	int lastForegroundExitStatus = 0;
 	int numChildProcesses = 0;
 	pid_t childProcessesRunning[200]; // 'ulimit -a' on os1 states a maximum of 200 user processes
+	int oldReceivedSIGTSTP = receivedSIGTSTP; // used to check for differences in receivedTSTP value
 
 	while (isExiting == 0)
 	{
+		
 		// Check if any of the currently running child processes have terminated
 		numChildProcesses = checkChildProcessesForTermination(childProcessesRunning, numChildProcesses);
+
 		printf("\n: ");
 		fflush(stdout);
 		scanf("%[^\n]%*c", &commandInput); 
+
+		// Check for SIGTSTP from command line
+		checkForSIGTSTP(oldReceivedSIGTSTP);
+		oldReceivedSIGTSTP = receivedSIGTSTP;
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
 			char* expandedCommandInput = expandPids(commandInput);
 			strcpy(commandInput, expandedCommandInput);
 			struct command* command = parseCommand(commandInput);
+
+			// If SIGTSTP is currently in foreground-only mode, set ampersand boolean to 0
+			if (receivedSIGTSTP) {
+				command->hasAmpersandAsLast = 0;
+			}
 			//printCommand(command); // TODO remove this line and line below, for debugging only
 			//fflush(stdout);
 
@@ -569,10 +615,14 @@ void displayPrompt(void)
 					childProcessesRunning[numChildProcesses] = mostRecentChildProcess;
 					numChildProcesses++;
 				}
-				// Otherwise, store it as the FG process exit status 
+				// Otherwise, store it as the FG process exit status (this is used in built-in 'status' command)
 				else
 				{
-					lastForegroundExitStatus = mostRecentChildProcess; // TODO check if this is the right exit status
+					lastForegroundExitStatus = mostRecentChildProcess;
+
+					// Check for SIGTSTP after termination of last foreground process
+					checkForSIGTSTP(oldReceivedSIGTSTP);
+					oldReceivedSIGTSTP = receivedSIGTSTP;
 				}
 			}
 		}
@@ -598,13 +648,18 @@ void handle_SIGINT(int signo)
 * SIGINT will then go on to kill any foreground processes.
 * Args: int (signal number)
 * Returns: None
-
+*/
 void handle_SIGTSTP(int signo)
 {
-	char* message = "Caught SIGINT, process terminated by signal 2.\n";
-	fflush(stdout);
-	write(STDOUT_FILENO, message, 39);
-} */
+	if (receivedSIGTSTP == 0)
+	{
+		receivedSIGTSTP = 1;
+	}
+	else
+	{
+		receivedSIGTSTP = 0;
+	}
+} 
 
 int main()
 {
@@ -623,7 +678,10 @@ int main()
 	// Install our signal handler
 	sigaction(SIGINT, &SIGINT_action, NULL);
 
-	/*// SIGTSTP HANDLER
+	
+
+	// SIGTSTP HANDLER
+	
 
 	// Initialize SIGITSTP_action struct to be empty
 	struct sigaction SIGTSTP_action = { 0 };
@@ -635,7 +693,7 @@ int main()
 	SIGTSTP_action.sa_flags = 0;
 
 	// Install our signal handler
-	sigaction(SIGTSTP, &SIGTSTP_action, NULL); */
+	sigaction(SIGTSTP, &SIGTSTP_action, NULL); 
 
 	displayPrompt();
 	return 0;
