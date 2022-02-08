@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/wait.h>
+#include <signal.h>
+#define _POSIX_C_SOURCE 200809L
 
 struct command {
 	char* command;
@@ -21,6 +23,7 @@ struct command {
 * Prints each arg in a command
 * Args: char args[513 elements] (need to support 512 args, but copy the command into the first arg for execvp() )
 * Returns: None
+* Used primarily for debugging.
 */
 void printArgs(char* args[513], int numArgs)
 {
@@ -36,6 +39,7 @@ void printArgs(char* args[513], int numArgs)
 * Args: struct command*
 * Returns: None
 * Citation: Adapted from Assignment 1 Resources
+* Used primarily for debugging.
 */
 void printCommand(struct command* command) {
 	printf("%s, %s, %s, %d\n", command->command,
@@ -45,9 +49,13 @@ void printCommand(struct command* command) {
 	printArgs(command->args, command->numArgs);
 }
 
-// Does not do any checking that input or output files are after all commands
-// Due to assignment reqs in Section 1 stating: 
-// "You do not need to do any error checking on the syntax of the command line"
+/* Parses command line input and breaks down entry into command, args, I/O files.
+* Does not do any checking that input or output files are after all commands
+* Due to assignment reqs in Section 1 stating: 
+* "You do not need to do any error checking on the syntax of the command line"
+* Args: char[2049]
+* Returns: struct command*
+*/
 struct command* parseCommand(char commandInput[2049])
 {
 	// TODO check for $$ expansion
@@ -64,6 +72,8 @@ struct command* parseCommand(char commandInput[2049])
 	token = strtok(commandInput, space);
 	commandStruct->command = calloc(strlen(token) + 1, sizeof(char));
 	strcpy(commandStruct->command, token);
+
+	// Add command as first element of args array, since execvp()/our method for executing child processes requires this
 	commandStruct->args[0] = calloc(strlen(token) + 1, sizeof(char));
 	strcpy(commandStruct->args[0], token);
 	token = strtok(NULL, space);
@@ -93,7 +103,7 @@ struct command* parseCommand(char commandInput[2049])
 		}
 		else
 		{
-			// TODO if we need to support space in file path for cd, check for that here
+			// Add to args array
 			commandStruct->args[i] = calloc(strlen(token) + 1, sizeof(char));
 			strcpy(commandStruct->args[i], token);
 			i++;
@@ -104,6 +114,11 @@ struct command* parseCommand(char commandInput[2049])
 	return commandStruct;
 }
 
+/* Iterates through each character of the command line entry and checks for non-whitespace chars.
+* If no non-whitespace chars are found, returns 1 (True), otherwise, returns 0 (False)
+* Args: char[2049]
+* Returns: int (1 or 0)
+*/
 int isBlankLine(char commandInput[2049])
 {
 	char space[2] = " ";
@@ -118,6 +133,11 @@ int isBlankLine(char commandInput[2049])
 	return 1;
 }
 
+/* Iterates through command line to compare the first non-whitespace char to #.
+* If the first non-whitespace char = #, then the line is a comment, and returns 1 (True), otherwise, returns 0 (False)
+* Args: char[2049]
+* Returns: int (1 or 0)
+*/
 int isComment(char commandInput[2049])
 {
 	char pound[2] = "#";
@@ -142,6 +162,12 @@ int isComment(char commandInput[2049])
 	return 0;
 }
 
+/* Iterates through the command line entry to look for instances of '$$'
+* Replaces any instances of '$$' in-place with the current process ID,
+* Then resumes checking the rest of the line until the end is reached.
+* Args: char[2049]
+* Returns: char*, the newly PID-expanded command line entry.
+*/
 char* expandPids(char commandInput[2049]) 
 {
 	char dollarSign[2] = "$";
@@ -192,6 +218,13 @@ char* expandPids(char commandInput[2049])
 	return commandInput;
 }
 
+/* Performs the 'cd' command using chdir().
+* If no arguments given, changes dir to the path specified by the OS's $HOME env variable.
+* Otherwise, changes dir to the directory specified in the first argument following the command.
+* Supports absolute and relative paths.
+* Args: struct command*
+* Returns: None
+*/
 void changeDir(struct command* command)
 {
 	char* HOME = "HOME";
@@ -208,9 +241,9 @@ void changeDir(struct command* command)
 		else
 		{
 			char* cwdPath[2049];
-			getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
-			printf("current dir is: %s\n", cwdPath);
-			fflush(stdout);
+			//getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
+			//printf("current dir is: %s\n", cwdPath);
+			//fflush(stdout);
 		}
 	}
 	// If args following CD
@@ -226,8 +259,8 @@ void changeDir(struct command* command)
 		if (strncmp(cwdPath, filePath, strlen(cwdPath)) == 0) // TODO not sure if comparing against CWD is correct?? we may just want to check for first char being /
 		{
 			// If they did, we don't need to concat the full CWD onto the desired directory
-			printf("desired dir is: %s\n", filePath);
-			fflush(stdout);
+			//printf("desired dir is: %s\n", filePath);
+			//fflush(stdout);
 			int cdSuccess = chdir(filePath);
 		}
 		else
@@ -236,8 +269,8 @@ void changeDir(struct command* command)
 			char* slash = "/";
 			strcat(cwdPath, slash);
 			strcat(cwdPath, filePath);
-			printf("desired dir is: %s\n", cwdPath);
-			fflush(stdout);
+			//printf("desired dir is: %s\n", cwdPath);
+			//fflush(stdout);
 			int cdSuccess = chdir(cwdPath);
 		}
 		int cdSuccess = chdir(cwdPath);
@@ -246,18 +279,34 @@ void changeDir(struct command* command)
 			printf("Error changing directory.\n");
 			fflush(stdout);
 		}
+		/*
 		else
 		{
 			char* cwdPath[2049];
 			getcwd(cwdPath, sizeof(cwdPath)); // TODO remove this and lines below, for debugging only
 			printf("current dir is: %s\n", cwdPath);
 			fflush(stdout);
-		}
+		} */
 		memset(cwdPath, '/0', strlen(cwdPath));
 	}
 }
 
-// Citation: Module 4 Exploration: Process API - Executing a New Program
+/*
+* Uses fork() to create a child process, then uses execvp() to execute the child process.
+* If the user entered a '&' as the last arg in their command line entry,
+* the process is run in the background - i.e. the program does not wait for it to complete
+* execution before prompting the user again. 
+* 
+* If the user did not enter a '&' as the last arg, the process is run in the foreground,
+* i.e. the program waits for process completion before prompting the user again.
+* 
+* Can redirect input and output if I/O redirect files are specified in the command.
+* For background processes, if I/O files are not specified, redirects I/O to /dev/null.
+* 
+* Args: struct command*
+* Returns: pid_t (the PID of the child process it executed).
+* Citation: Module 4 Exploration : Process API - Executing a New Program
+*/
 pid_t createFork(struct command* command)
 {
 	int childStatus;
@@ -276,12 +325,11 @@ pid_t createFork(struct command* command)
 		break;
 	case 0:
 		// In the child process
-		printf("CHILD(%d) running command\n", getpid());
-		fflush(stdout);
+		//printf("CHILD(%d) running command\n", getpid());
+		//fflush(stdout);
 
-		int sourceFD = 0;
-		int targetFD = 1;
-
+		///int sourceFD = 0;
+		//int targetFD = 1;
 
 		// Check for input redirection (or set input redirection to /dev/null if BG process and no specified input file)
 		if (command->inputFile || command->hasAmpersandAsLast) 
@@ -299,7 +347,7 @@ pid_t createFork(struct command* command)
 			// Open source file
 			int sourceFD = open(inputFile, O_RDONLY);
 			if (sourceFD == -1) {
-				perror("source open()");
+				perror("Cannot open the source file");
 				fflush(stdout);
 				exit(1);
 			}
@@ -310,7 +358,7 @@ pid_t createFork(struct command* command)
 			// Redirect stdin to source file
 			int result = dup2(sourceFD, 0);
 			if (result == -1) {
-				perror("source dup2()");
+				perror("Cannot read from the source file");
 				fflush(stdout);
 				exit(2);
 			}
@@ -332,7 +380,7 @@ pid_t createFork(struct command* command)
 			// Open target file
 			int targetFD = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 			if (targetFD == -1) {
-				perror("target open() error");
+				perror("Cannot open the target file");
 				fflush(stdout);
 				exit(1);
 			}
@@ -342,7 +390,7 @@ pid_t createFork(struct command* command)
 			// Redirect stdout to target file
 			int result = dup2(targetFD, 1);
 			if (result == -1) {
-				perror("target dup2() error");
+				perror("Cannot write to the target file");
 				fflush(stdout);
 				exit(2);
 			}
@@ -354,7 +402,7 @@ pid_t createFork(struct command* command)
 		// exec only returns if there is an error
 		if (execStatus == -1)
 		{
-			perror("execvp error");
+			perror("Cannot find command");
 			fflush(stdout);
 			exit(1); // TODO is this being set correctly?? check the test script
 		}
@@ -371,10 +419,14 @@ pid_t createFork(struct command* command)
 		if (!command->hasAmpersandAsLast)
 		{
 			spawnPid = waitpid(spawnPid, &childStatus, 0);
-			printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
-			fflush(stdout);
+			//printf("PARENT(%d): child(%d) terminated. Exiting\n", getpid(), spawnPid);
+			//fflush(stdout);
 			spawnPid = childStatus; // set spawnPid to be the exit status of the foreground process, for printing on next 'status' command
 			// TODO check if this is the right exit status
+		}
+		else
+		{
+			printf("Background PID %d has started", spawnPid);
 		}
 		
 		// Return spawnPid back to displayPrompt loop so that we can check for its termination
@@ -385,6 +437,12 @@ pid_t createFork(struct command* command)
 	//free(executableCommand);
 }
 
+/* Loops through an array of background child process PIDs
+* and checks if they have terminated. If they have, prints a message with the PID
+* stating that it has terminated, and removes the PID from the array.
+* Args: pid_t[200] (array of child PIDs)
+* Returns: int (number of PIDs in the array that have NOT yet terminated)
+*/
 int checkChildProcessesForTermination(pid_t childProcessesRunning[200], int numChildProcesses)
 {
 	pid_t nonTerminatedChildren[200];
@@ -408,7 +466,7 @@ int checkChildProcessesForTermination(pid_t childProcessesRunning[200], int numC
 		else if (pidStatus == -1)
 		{
 			printf("Error checking PID %d\n", childPid);
-			perror("error");
+			//perror("error");
 			fflush(stdout);
 		}
 		// If waitpid() returns the PID, the child process has terminated
@@ -416,6 +474,7 @@ int checkChildProcessesForTermination(pid_t childProcessesRunning[200], int numC
 		{
 			// Print process ID and exit status
 			printf("Child process %d terminated with exit status %d.\n", childPid, childStatus); // TODO check if this is the right exit status
+			fflush(stdout);
 		}
 	}
 
@@ -435,6 +494,27 @@ int checkChildProcessesForTermination(pid_t childProcessesRunning[200], int numC
 	return numNonTerminatedChildren;
 }
 
+/* Iterates through array of child process PIDs and kills each process.
+* Invoked immediately before shell exit.
+* Args: pid_t[200] (array of child process PIDs), int (number of currently running child processes).
+* Returns: None
+*/
+void killChildProcesses(pid_t childProcessesRunning[200], int numChildProcesses)
+{
+	for (int i = 0; i < numChildProcesses; i++)
+	{
+		kill(childProcessesRunning[i], SIGKILL);
+	}
+}
+
+/*
+* Uses a while loop to continuously prompt the user for command line input.
+* Retrieves user input and uses parseCommand() to assign user input to a command struct.
+* Has built-in handling of commands 'status', 'cd', and 'exit'.
+* Passes all other commands to createFork().
+* Args: None
+* Returns: None
+*/
 void displayPrompt(void)
 {
 	int isExiting = 0;
@@ -452,19 +532,19 @@ void displayPrompt(void)
 		numChildProcesses = checkChildProcessesForTermination(childProcessesRunning, numChildProcesses);
 		printf("\n: ");
 		fflush(stdout);
-		scanf("%[^\n]%*c", &commandInput); // TODO handle blank new line entry
+		scanf("%[^\n]%*c", &commandInput); 
 		
 		if (!isBlankLine(&commandInput) && !isComment(&commandInput)) {
 			char* expandedCommandInput = expandPids(commandInput);
 			strcpy(commandInput, expandedCommandInput);
 			struct command* command = parseCommand(commandInput);
-			printCommand(command); // TODO remove this line and line below, for debugging only
-			fflush(stdout);
+			//printCommand(command); // TODO remove this line and line below, for debugging only
+			//fflush(stdout);
 
 			// Check for exit
 			if (strncmp(command->command, exit, 5) == 0)
 			{
-				// TODO kill all processes created by this shell
+				killChildProcesses(childProcessesRunning, numChildProcesses);
 				isExiting = 1;
 			}
 			// Check for cd
@@ -500,8 +580,63 @@ void displayPrompt(void)
 	}
 }
 
+/*
+* Handles SIGINT (Ctrl-C) by printing a message.
+* SIGINT will then go on to kill any foreground processes.
+* Args: int (signal number)
+* Returns: None
+*/
+void handle_SIGINT(int signo)
+{
+	char* message = "Caught SIGINT, process terminated by signal 2.\n";
+	fflush(stdout);
+	write(STDOUT_FILENO, message, 39);
+}
+
+/*
+* Handles SIGTSTP (Ctrl-Z) by printing a message.
+* SIGINT will then go on to kill any foreground processes.
+* Args: int (signal number)
+* Returns: None
+
+void handle_SIGTSTP(int signo)
+{
+	char* message = "Caught SIGINT, process terminated by signal 2.\n";
+	fflush(stdout);
+	write(STDOUT_FILENO, message, 39);
+} */
+
 int main()
 {
+	// Signal handler installation taken from Module 5 Explorations
+
+	// SIGINT HANDLER
+
+	// Initialize SIGINT_action struct to be empty
+	struct sigaction SIGINT_action = { 0 };
+	// Register handle_SIGINT as the signal handler
+	SIGINT_action.sa_handler = handle_SIGINT;
+	// Block all catchable signals while handle_SIGINT is running
+	sigfillset(&SIGINT_action.sa_mask);
+	// No flags set
+	SIGINT_action.sa_flags = 0;
+	// Install our signal handler
+	sigaction(SIGINT, &SIGINT_action, NULL);
+
+	/*// SIGTSTP HANDLER
+
+	// Initialize SIGITSTP_action struct to be empty
+	struct sigaction SIGTSTP_action = { 0 };
+	// Register handle_SIGTSTP as the signal handler
+	SIGTSTP_action.sa_handler = handle_SIGTSTP;
+	// Block all catchable signals while handle_SIGTSTP is running
+	sigfillset(&SIGTSTP_action.sa_mask);
+	// No flags set
+	SIGTSTP_action.sa_flags = 0;
+
+	// Install our signal handler
+	sigaction(SIGTSTP, &SIGTSTP_action, NULL); */
+
 	displayPrompt();
 	return 0;
 }
